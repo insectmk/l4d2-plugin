@@ -1,0 +1,100 @@
+{
+    // ============================================================
+    //  L4D2 SourceMod 插件工作区 - VSCode 配置模板
+    // ------------------------------------------------------------
+    //  使用方式：
+    //    1. 复制本文件为 .vscode/settings.json
+    //    2. 把所有 "xxxx" 占位符替换为你本机/服务器的实际值
+    //    3. 切勿把真实的 settings.json 提交到 Git（已通过 .gitignore 排除）
+    //
+    //  本文件本身是脱敏后的模板，可以安全提交到仓库
+    // ============================================================
+
+    // 指定 SourcePawn 编译器（spcomp.exe）的位置，使用绝对路径
+    // ⚠️ 把路径中的 xxxx 替换为你的 Windows 用户名
+    "SourcePawnLanguageServer.compiler.path": "C:/Users/xxxx/Documents/Hub/l4d2-plugin/spcomp.exe",
+
+    // 额外的头文件搜索路径（数组形式，可以写多个）
+    // 比如你项目里自己写的或者第三方插件的 include 文件放在别的文件夹，就加在这里
+    // 编译时，默认会带入sp源码同目录下的 include 文件夹
+    // ⚠️ 把路径中的 xxxx 替换为你的 Windows 用户名
+    "SourcePawnLanguageServer.includeDirectories": [
+        "C:/Users/xxxx/Documents/Hub/l4d2-plugin/include"
+    ],
+
+    // 编译后的 .smx 插件文件输出到哪个文件夹
+    // 这里配置后，按 ctrl + shift + d 编译，生成的 .smx 就会自动放进 该 文件夹，使用绝对路径
+    // ⚠️ 把路径中的 xxxx 替换为你的 Windows 用户名
+    "sourcepawn.outputDirectoryPath": "C:/Users/xxxx/Documents/Hub/l4d2-plugin/compiled/",
+
+    // 游戏服务器连接配置（用于远程编译、热重载插件或 RCON 管理）
+    "sourcepawn.SourceServerOptions": {
+        // 服务器的域名或 IP 地址
+        // ⚠️ 替换为你的服务器地址
+        "host": "xxxx",
+
+        // 服务器的端口号
+        "port": 27015,
+
+        // 通信时使用的字符编码，一般保持 ascii 即可
+        "encoding": "ascii",
+
+        // 连接服务器的超时时间（单位：毫秒），1000 = 1秒
+        "timeout": 1000,
+
+        // ⚠️ 服务器 RCON 或连接密码（敏感信息，不要提交到 Git！）
+        // ⚠️ 替换为你的 RCON 密码
+        "password": "xxxx"
+    },
+    // 编译成功后是否自动把 .smx 上传到服务器（依赖下方 UploadOptions）
+    // true = 上传并触发 RCON 重载；false = 仅在本地生成 .smx，不上传
+    "sourcepawn.uploadToServerAfterCompile": false,
+    // SFTP/FTP 上传配置（当 uploadToServerAfterCompile = true 时生效）
+    // 上传时按本地目录结构镜像推送到 remoteRoot 下，所以 plugins/foo.smx 会上传到 <remoteRoot>/plugins/foo.smx
+    "sourcepawn.UploadOptions": {
+        // SFTP/FTP 服务器的域名或 IP（可与 SourceServerOptions.host 不同）
+        // ⚠️ 替换为你的服务器地址
+        "host": "xxxx",
+
+        // 端口：SFTP=22，FTP=21
+        "port": 21,
+
+        // SFTP/FTP 登录用户名
+        // ⚠️ 替换为你的 SSH/FTP 用户名
+        "username": "xxxx",
+
+        // SFTP/FTP 登录密码（敏感信息，不要提交到 Git！）
+        // 用 SSH 密钥免密登录时留空
+        // ⚠️ 替换为你的 SSH/FTP 密码
+        "password": "xxxx",
+
+        // 是否使用 SFTP 协议（true=SFTP，false=FTP），推荐 SFTP 更安全
+        "sftp": false,
+
+        // 服务器上 SourceMod 的根目录的父目录，所有上传文件会按本地目录结构镜像到此目录下
+        // L4D2 一般为：/your/l4d2/server/left4dead2/addons/sourcemod
+        "remoteRoot": "/your/l4d2/server/left4dead2/addons/sourcemod",
+
+        // 上传时需要排除的文件/目录（glob 模式）
+        // 排除掉源码、配置、文档等，避免把开发文件推上生产服务器
+        "exclude": [
+            "scripting/**/",
+            ".vscode/**/",
+            ".github/**/",
+            ".gitignore",
+            "*.md",
+            ".git"
+        ]
+    },
+    // 创建新插件脚手架时使用的 GitHub 用户名（SourcePawn Studio 内部使用）
+    // ⚠️ 替换为你的 GitHub 用户名
+    "sourcepawn.GithubName": "xxxx",
+
+    // 新建插件时自动填入 myinfo.author 字段的作者名
+    // ⚠️ 替换为你的昵称
+    "sourcepawn.AuthorName": "xxxx",
+
+    // 是否禁用 SourcePawn 语言服务器的内置 Linter
+    // false = 启用检查（推荐，会高亮潜在问题）；true = 关闭所有 Lint 告警
+    "SourcePawnLanguageServer.linter.disable": false,
+}
