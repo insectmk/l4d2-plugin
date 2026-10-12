@@ -1,0 +1,5 @@
+# 忽略真实配置，服务器隐私信息，将settings.json.example改为settings.json后修改使用
+.vscode/settings.json
+
+# 忽略编译后的文件
+compiled/
