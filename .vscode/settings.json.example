@@ -19,7 +19,8 @@
     // 编译时，默认会带入sp源码同目录下的 include 文件夹
     // ⚠️ 把路径中的 xxxx 替换为你的 Windows 用户名
     "SourcePawnLanguageServer.includeDirectories": [
-        "C:/Users/xxxx/Documents/Hub/l4d2-plugin/include"
+        "C:/Users/xxxx/Documents/Hub/l4d2-plugin/include",
+        "C:/Users/xxxx/Documents/Hub/l4d2-plugin/include-ext"
     ],
 
     // 编译后的 .smx 插件文件输出到哪个文件夹

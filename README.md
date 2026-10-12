@@ -82,6 +82,12 @@ l4d2-plugin/                ← 工作区根
 │   ├── halflife.inc
 │   └── ...（其他 SourceMod 官方 .inc）
 │
+├── include-ext/                   ← 跨插件共享的第三方 include（多个插件共用的库放这里）
+│   ├── README.md                  ←   本目录使用说明
+│   ├── multicolors.inc
+│   ├── left4dhooks_silver.inc
+│   └── ...（按需添加）
+│
 ├── plugins/                         ← 编译产物（与服务器 addons/sourcemod/plugins/ 同名）
 │   ├── plugin_hello.smx
 │   ├── plugin_l4d.smx
@@ -108,14 +114,18 @@ l4d2-plugin/                ← 工作区根
 │           └── （按需添加）
 ```
 
-### 📁 三个目录各自的角色
+### 📁 各个目录的角色
 
 | 目录 | 角色 | 是否进 git |
 |---|---|---|
 | `include/` | 官方 SourceMod 头文件（所有插件共用） | ❌ 通常不进（太大且与平台绑定） |
+| `include-ext/` | 跨插件共享的**第三方** include（多个插件都要用的库，如 `multicolors`） | ✅ |
 | `source/<plugin>/` | 插件源码（每个子目录 = 一个独立插件） | ✅ |
+| `source/<plugin>/include/` | 该插件**私有**的 include（只被这一个插件用到的库） | ✅ |
 | `plugins/` | 编译产物 | ❌（见 `.gitignore`） |
 | `.vscode/` | 编辑器配置（settings.json 已 gitignore） | ✅ 仅 example 文件 |
+
+> 💡 简单记法：**只被一个插件用到 → 插件私有 `include/`；被多个插件用到 → 根目录 `include-ext/`；官方库 → 根目录 `include/`。**
 
 ---
 
@@ -226,13 +236,10 @@ public void OnClientPutInServer(int client) {
 
 ### 第 3 步：（可选）下载第三方头文件
 
-如果插件需要第三方库（例如 `multicolors`），把 `.inc` 文件放到：
+如果插件需要第三方库（例如 `multicolors`），按使用范围二选一：
 
-```
-source/hello_welcome/include/multicolors.inc
-```
-
-并**新增** `source_plugin_hello/include/` 到 settings.json 的 `optionalIncludeDirsPaths`。
+- **只本插件用** → 放到 `source/hello_welcome/include/multicolors.inc`，并在 `settings.json` 的 `includeDirectories` 中加上 `source/hello_welcome/include`（`settings.json` / `settings.json.example` 默认未列出，需手动追加）
+- **多个插件都要用** → 放到根目录 `include-ext/multicolors.inc`（已在 `settings.json` 的 `includeDirectories` 中默认包含，全工作区可见，无需额外配置）
 
 > ⚠️ **重要**：所有第三方头文件必须使用 `.inc` 扩展名，不能用 `.sp`（spcomp 只识别 `.inc` 作为 include）。
 
@@ -301,8 +308,9 @@ source/hello_welcome/include/multicolors.inc
 |---|---|---|
 | 插件目录 | 小写 + 下划线 | `plugin_l4d`、`afk` |
 | 主源码文件 | 与插件目录同名 | `plugin_l4d/plugin_l4d.sp` |
-| 插件私有 include | `include/<库名>.inc` | `include/multicolors.inc` |
-| 第三方 include 子目录 | 与库的官方组织保持一致 | `include/multicolors/{morecolors,colors}.inc` |
+| 插件私有 include | `source/<plugin>/include/<库名>.inc` | `source/plugin_l4d/include/multicolors.inc` |
+| 共享第三方 include | `include-ext/<库名>.inc` | `include-ext/multicolors.inc` |
+| 第三方 include 子目录 | 与库的官方组织保持一致 | `include-ext/multicolors/{morecolors,colors}.inc` |
 
 ### 插件目录模板
 
@@ -347,7 +355,7 @@ public Plugin myinfo = {
 | 把多个插件源码混在一个目录 | 一个插件 = 一个子目录 |
 | 跨插件共享 `.sp` 源文件 | 各自维护自己的副本（SourcePawn 不支持跨插件 include `.sp`） |
 | 把 `.sp` 文件当 include 引用 | include 必须用 `.inc` 扩展名 |
-| 把第三方 include 放在工作区根 `include/` | 放插件私有 `include/`，避免污染官方库 |
+| 把第三方 include 混进工作区根 `include/`（污染官方库） | 放 `include-ext/`（共享）或 `source/<plugin>/include/`（私有） |
 | 把 `compiled/` 保留为输出目录 | 改名为 `plugins/`，与服务器同名目录一一对应 |
 
 ---
@@ -435,6 +443,6 @@ sm plugins unload <plugin_name>
 ## 🤝 维护说明
 
 - 所有**敏感凭据**（RCON 密码、SSH 密码）必须放在 `.vscode/settings.json`，**绝不能提交**。`.gitignore` 已排除该文件。
-- 新加第三方库时，**优先放在对应插件的 `include/` 下**，避免污染工作区根 `include/`。
-- 每次新增插件，记得在 `optionalIncludePaths` 中**追加**对应的 `include/` 路径，否则新插件的私有头文件找不到。
+- 新加第三方库时，**只被一个插件用到** → 放 `source/<plugin>/include/`；**被多个插件用到** → 放 `include-ext/`。**不要混进工作区根 `include/`**（那是给 SourceMod 官方头文件留的）。
+- `include-ext/` 默认已经在 `settings.json` 的 `includeDirectories` 中包含；新增插件私有 include 时，记得在 `includeDirectories` 中**追加**对应的 `source/<plugin>/include/` 路径。
 - 修改本工作区结构时，**同步更新本文档**，避免知识漂移。
