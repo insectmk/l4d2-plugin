@@ -15,6 +15,7 @@
 - [源码目录规范](#源码目录规范)
 - [常见问题](#常见问题)
 - [参考资料](#参考资料)
+- [许可](#-许可)
 
 ---
 
@@ -436,7 +437,89 @@ sm plugins unload <plugin_name>
 
 ## 📜 许可
 
-本仓库源码遵循 GPL（继承自 SourceMod 生态）。具体许可见各 `.sp` 文件头注释。
+### 仓库许可声明
+
+本仓库整体遵循 **GPLv3**，详见根目录 [`LICENSE`](./LICENSE) 文件。
+
+> 顶层 `Copyright (C) 2026 InsectMk` 署名**仅针对仓库原创部分**，不覆盖各 `.sp` / `.inc` 文件自身的 copyright header（fork 自他人的文件，原作者归属不变）。
+
+### License 兼容性矩阵
+
+引入新第三方代码前，先看它的 license 是否允许：
+
+| 上游 license | 处置 |
+|---|---|
+| GPLv3 / GPLv2+ / LGPL | ✅ 沿用 GPLv3，整库兼容 |
+| AGPL | ✅ 沿用 GPLv3（SourceMod 插件不构成 AGPL §13 定义的"网络服务"） |
+| MIT / BSD-2 / BSD-3 | ✅ 允许嵌入，但 fork 文件头必须保留上游 permission notice |
+| Apache 2.0 | ⚠️ 理论不兼容（专利条款方向相反），**禁止整段嵌入** |
+| GPLv2-only | ❌ **禁止嵌入**，与本仓库硬冲突 |
+| 无 license / All rights reserved | ❌ **禁止嵌入**，需先联系作者 |
+
+### 文件头模板
+
+#### ① 自写代码
+
+```sourcepawn
+/*
+ * <plugin_name>
+ * ------------------------------------------------------------
+ * Copyright (C) 2026 <your_name>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ */
+```
+
+#### ② Fork 自他人
+
+```sourcepawn
+/*
+ * <plugin_name> - 本地 fork 版
+ * ------------------------------------------------------------
+ * 原作者:        <原作者>
+ * 原仓库:        <原仓库 URL>
+ * 原 license:    <原 license>
+ * 上游 commit/tag: <commit SHA 或 tag>
+ *
+ * 本 fork 的修改点:
+ *   - YYYY-MM: <说明>
+ *
+ * 同步策略:      <硬分叉 / 定期 rebase / 仅 cherry-pick>
+ * 是否已向上游 PR: <是 / 否 / 不适用>
+ * Bug 反馈:      <本仓库 issues URL>
+ *
+ * Fork 维护者:   <你的名字>
+ * Fork 时间:     YYYY-MM
+ * 本 fork license: <GPLv3 / 与上游 license 保持一致>
+ */
+```
+
+#### ③ 混合文件（自写 + 第三方代码段）
+
+如文件中嵌入了第三方代码片段，**保留该片段原有的 license header**，并在文件头 fork 区块中列出对应组件。
+
+### 上游与第三方组件登记表
+
+> 后续每加 fork 或新引入第三方组件，**必须**在此表追加一行。
+
+| 类型 | 组件 | 原作者 | 原 license | 原仓库 | 本仓库路径 | 引入日期 |
+|---|---|---|---|---|---|---|
+| Fork | taketank.sp | 奈 (NanakaNeko) | **待核实** | https://github.com/NanakaNeko/l4d2_plugins_coop | `source/taketank/` | 2026-10 |
+| 第三方 include | left4dhooks (5 个 .inc) | Silvers（含 ProdigySim / Downtown1 / Visor / Attano / Accelerator74 / LuxLuma / Mr.Zero） | GPLv3+ | https://github.com/Silvers-Careee/Left-4-Dead-Direct | `include-ext/` | 2026-10 |
+| 第三方 include | multicolors | Popoklopsi / Powerlord / exvel / Dr. McKay | **待核实** | https://github.com/Popoklopsi | `include-ext/` | 2026-10 |
+| 第三方 include | l4dd 系列 | Silvers | GPLv3+ | 同 left4dhooks | `source/afk/l4dd/` | 2026-10 |
+| 官方头 | SourceMod 1.11 | AlliedModders | GPL / LGPL | https://github.com/alliedmodders/sourcemod | `include/` | 2026-10 |
+
+### 编译产物的 license 顺延
+
+`compiled/*.smx` 是 GPLv3 源码的编译产物，自动继承 GPLv3。**分发 `.smx` 时必须配套提供源码或指向本仓库的链接**。
+
+### SourceMod 官方 `include/` 的处理
+
+`include/` 下的 SourceMod 官方头文件是编译期依赖，**不附** SourceMod 自己的 LICENSE 副本（与 Linux kernel 头同理：编译期依赖 ≠ 二次分发）。如需查看其 license，请访问 [SourceMod 仓库](https://github.com/alliedmodders/sourcemod)。
 
 ---
 
@@ -445,4 +528,5 @@ sm plugins unload <plugin_name>
 - 所有**敏感凭据**（RCON 密码、SSH 密码）必须放在 `.vscode/settings.json`，**绝不能提交**。`.gitignore` 已排除该文件。
 - 新加第三方库时，**只被一个插件用到** → 放 `source/<plugin>/include/`；**被多个插件用到** → 放 `include-ext/`。**不要混进工作区根 `include/`**（那是给 SourceMod 官方头文件留的）。
 - `include-ext/` 默认已经在 `settings.json` 的 `includeDirectories` 中包含；新增插件私有 include 时，记得在 `includeDirectories` 中**追加**对应的 `source/<plugin>/include/` 路径。
+- **每加一个 fork 或新引入第三方组件**，**必须**在「[上游与第三方组件登记表](#上游与第三方组件登记表)」中**追加一行**，先看「[License 兼容性矩阵](#license-兼容性矩阵)」判断是否可引入。
 - 修改本工作区结构时，**同步更新本文档**，避免知识漂移。
