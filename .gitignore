@@ -4,3 +4,6 @@
 # 忽略编译后的文件
 plugins/
 compile.dat
+
+# 文档
+docs/example
