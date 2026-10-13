@@ -2,4 +2,5 @@
 .vscode/settings.json
 
 # 忽略编译后的文件
-compiled/
+plugins/
+compile.dat

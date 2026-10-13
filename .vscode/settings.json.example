@@ -26,7 +26,7 @@
     // 编译后的 .smx 插件文件输出到哪个文件夹
     // 这里配置后，按 ctrl + shift + d 编译，生成的 .smx 就会自动放进 该 文件夹，使用绝对路径
     // ⚠️ 把路径中的 xxxx 替换为你的 Windows 用户名
-    "sourcepawn.outputDirectoryPath": "C:/Users/xxxx/Documents/Hub/l4d2-plugin/compiled/",
+    "sourcepawn.outputDirectoryPath": "C:/Users/xxxx/Documents/Hub/l4d2-plugin/plugins/",
 
     // 游戏服务器连接配置（用于远程编译、热重载插件或 RCON 管理）
     "sourcepawn.SourceServerOptions": {
@@ -79,12 +79,17 @@
         // 上传时需要排除的文件/目录（glob 模式）
         // 排除掉源码、配置、文档等，避免把开发文件推上生产服务器
         "exclude": [
-            "scripting/**/",
+            "source/**/",
+            "include/**/",
+            "include-ext/**/",
             ".vscode/**/",
             ".github/**/",
             ".gitignore",
             "*.md",
-            ".git"
+            ".git",
+            "compile.dat",
+            "*.exe",
+            "LICENSE",
         ]
     },
     // 创建新插件脚手架时使用的 GitHub 用户名（SourcePawn Studio 内部使用）

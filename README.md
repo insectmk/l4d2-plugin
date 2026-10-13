@@ -357,7 +357,7 @@ public Plugin myinfo = {
 | 跨插件共享 `.sp` 源文件 | 各自维护自己的副本（SourcePawn 不支持跨插件 include `.sp`） |
 | 把 `.sp` 文件当 include 引用 | include 必须用 `.inc` 扩展名 |
 | 把第三方 include 混进工作区根 `include/`（污染官方库） | 放 `include-ext/`（共享）或 `source/<plugin>/include/`（私有） |
-| 把 `compiled/` 保留为输出目录 | 改名为 `plugins/`，与服务器同名目录一一对应 |
+| 把 `.smx` 输出到与服务器 `addons/sourcemod/plugins/` 同名的本地目录 | 统一输出到根目录 `plugins/`，便于 SFTP 镜像上传 |
 
 ---
 
@@ -388,7 +388,7 @@ SourcePawn Studio 连服务器失败（TCP RCON）。常见原因：
 ### 上传后服务器看不到插件
 
 1. 检查 `remoteRoot` 是否指向服务器上 `addons/sourcemod` 目录
-2. 检查本地输出目录名是否与 SourceMod 一致（即 `plugins/` 而不是 `compiled/`）
+2. 检查本地输出目录名是否与 SourceMod 一致（即 `plugins/`，与服务器 `addons/sourcemod/plugins/` 对应）
 3. 上传是**镜像整个工作区树**到 `remoteRoot` 下，本地 `plugins/foo.smx` 镜像到 `<remoteRoot>/plugins/foo.smx`
 
 ### 服务器没自动重载插件
@@ -515,7 +515,7 @@ sm plugins unload <plugin_name>
 
 ### 编译产物的 license 顺延
 
-`compiled/*.smx` 是 GPLv3 源码的编译产物，自动继承 GPLv3。**分发 `.smx` 时必须配套提供源码或指向本仓库的链接**。
+`plugins/*.smx` 是 GPLv3 源码的编译产物，自动继承 GPLv3。**分发 `.smx` 时必须配套提供源码或指向本仓库的链接**。
 
 ### SourceMod 官方 `include/` 的处理
 
