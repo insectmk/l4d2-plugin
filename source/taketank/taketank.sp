@@ -1,6 +1,7 @@
 #pragma semicolon 1
 #pragma newdecls required
 #include <sourcemod>
+#include <sdktools>
 #include <sdkhooks>
 #include <left4dhooks>
 #include <multicolors>
@@ -17,6 +18,7 @@
  *   - 2026-10: 增加 AutoExecConfig 自动生成 addons/cfg/sourcemod/taketank.cfg
  *   - 2026-10: 增加接管者击倒/击杀幸存者的回血配置 + 公屏信息美化（multicolors）
  *   - 2026-10: 增加接管者 Tank 被击杀后的处理模式（直接死亡/复活接管/复活倒地）
+ *   - 2026-10: 增加复活时保留原枪械/药品/投掷物的开关（含近战武器）
  *
  * 同步策略:      硬分叉
  * 是否已向上游 PR: 否
@@ -28,17 +30,29 @@
  */
 
 #define GAMEDATA "taketank"
+#define LOADOUT_CLASS_LEN 64
 
 ConVar
 	cv_PbEnable,
 	cv_HealOnDown,
 	cv_HealOnKill,
-	cv_DeathHandling;
+	cv_DeathHandling,
+	cv_KeepItems;
 
 bool
 	IsPlayerPB[MAXPLAYERS + 1],
 	TankBot[MAXPLAYERS + 1],
-	g_bIsTankTaker[MAXPLAYERS + 1];
+	g_bIsTankTaker[MAXPLAYERS + 1],
+	g_bHasLoadout[MAXPLAYERS + 1];
+
+// 接管坦克前快照的幸存者物品（槽位 0~4）
+char
+	g_sLoadoutPrimary[MAXPLAYERS + 1][LOADOUT_CLASS_LEN],
+	g_sLoadoutSecondary[MAXPLAYERS + 1][LOADOUT_CLASS_LEN],
+	g_sLoadoutMelee[MAXPLAYERS + 1][LOADOUT_CLASS_LEN], // 近战武器的具体型号
+	g_sLoadoutThrowable[MAXPLAYERS + 1][LOADOUT_CLASS_LEN],
+	g_sLoadoutHealth[MAXPLAYERS + 1][LOADOUT_CLASS_LEN],
+	g_sLoadoutTemp[MAXPLAYERS + 1][LOADOUT_CLASS_LEN];
 
 Address g_pStatsCondition;
 bool    g_bStatsPatched;
@@ -48,7 +62,7 @@ public Plugin myinfo =
 	name = "[L4D2]接管坦克",
 	description = "L4D2 take tank,use in coop mode",
 	author = "奈",
-	version = "1.3.0",
+	version = "1.3.1",
 	url = "https://github.com/NanakaNeko/l4d2_plugins_coop"
 };
 
@@ -59,6 +73,7 @@ public void OnPluginStart()
 	cv_HealOnDown     = CreateConVar("l4d2_take_tank_heal_on_down",   "0", "接管者击倒幸存者回血量。0=不回血;0<x<1=基于最大血量百分比;x>=1=固定血量。仅对接管人控制的Tank生效。", FCVAR_NOTIFY);
 	cv_HealOnKill     = CreateConVar("l4d2_take_tank_heal_on_kill",   "0", "接管者击杀幸存者回血量(规则同上)。", FCVAR_NOTIFY);
 	cv_DeathHandling  = CreateConVar("l4d2_take_tank_death_handling", "0", "接管者Tank被击杀后处理。0=直接死亡;1=复活接管原幸存者bot(找不到bot直接复活);2=复活接管后倒地。", FCVAR_NOTIFY, true, 0.0, true, 2.0);
+	cv_KeepItems      = CreateConVar("l4d2_take_tank_keep_items",    "1", "接管者复活为幸存者时，是否保留接管前的枪械/药品/投掷物。仅 death_handling=1/2 生效。0=不保留;1=保留。", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	HookConVarChange(cv_PbEnable, CvarChange);
 
 	// ② 注册命令
@@ -103,6 +118,7 @@ public void OnClientDisconnect(int client)
 {
 	IsPlayerPB[client]      = false;
 	g_bIsTankTaker[client]  = false;
+	ClearLoadout(client);
 }
 
 void reset()
@@ -113,6 +129,7 @@ void reset()
 			ChangeClientTeamToSurvivor(client);
 		IsPlayerPB[client]     = false;
 		g_bIsTankTaker[client] = false;
+		ClearLoadout(client);
 	}
 }
 
@@ -216,6 +233,7 @@ void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 
 		if (mode == 0)
 		{
+			ClearLoadout(victim); // 直接死亡，不保留物品快照
 			ChangeClientTeamToSurvivor(victim); // 已包含 g_bIsTankTaker 清理
 			return;
 		}
@@ -282,6 +300,9 @@ void NextFrame_RespawnTaker(DataPack dPack)
 		StatsConditionPatch(false);
 	}
 
+	// 恢复接管前的枪械/药品/投掷物（可用 l4d2_take_tank_keep_items 关闭）
+	RestoreLoadout(client);
+
 	// 传送回 Tank 死亡位置（用户要求）
 	if (IsPlayerAlive(client))
 	{
@@ -333,6 +354,7 @@ Action TakeTank(int client, int args)
 	{
 		int m_iHealth = GetEntProp(tank, Prop_Data, "m_iHealth");
 		int m_iMaxHealth = GetEntProp(tank, Prop_Data, "m_iMaxHealth");
+		SnapshotLoadout(client); // 变成 Tank 前记录原幸存者物品
 		ChangeClientTeam(client, 3);
 		L4D_TakeOverZombieBot(client, tank);
 		SetEntProp(client, Prop_Data, "m_iHealth", m_iHealth);
@@ -421,6 +443,7 @@ int TakeOverTank(int tank)
 	{
 		int m_iHealth = GetEntProp(tank, Prop_Data, "m_iHealth");
 		int m_iMaxHealth = GetEntProp(tank, Prop_Data, "m_iMaxHealth");
+		SnapshotLoadout(client); // 变成 Tank 前记录原幸存者物品
 		ChangeClientTeam(client, 3);
 		L4D_TakeOverZombieBot(client, tank);
 		SetEntProp(client, Prop_Data, "m_iHealth", m_iHealth);
@@ -440,6 +463,127 @@ void ChangeClientTeamToSurvivor(int client)
 	ChangeClientTeam(client, 2);
 	if (IsPlayerAlive(client))
 		ForcePlayerSuicide(client);
+}
+
+// =============================================================================
+//                        接管前物品快照 / 复活后恢复
+//   槽位: 0=主武器 1=副武器(手枪/近战) 2=投掷物 3=医疗包/除颤器 4=药丸/肾上腺素
+// =============================================================================
+void SnapshotLoadout(int client)
+{
+	ClearLoadout(client);
+
+	// 只有活着的幸存者才有物品可记录
+	if (!IsClientInGame(client) || !IsPlayerAlive(client) || GetClientTeam(client) != 2)
+		return;
+
+	g_bHasLoadout[client] = true;
+
+	int weapon;
+	if ((weapon = GetPlayerWeaponSlot(client, 0)) != -1)
+		GetEntityClassname(weapon, g_sLoadoutPrimary[client], LOADOUT_CLASS_LEN);
+
+	if ((weapon = GetPlayerWeaponSlot(client, 1)) != -1)
+	{
+		GetEntityClassname(weapon, g_sLoadoutSecondary[client], LOADOUT_CLASS_LEN);
+
+		// 近战武器统一类名都是 weapon_melee，具体型号保存在 m_strMapSetScriptName
+		if (StrEqual(g_sLoadoutSecondary[client], "weapon_melee")
+			&& HasEntProp(weapon, Prop_Data, "m_strMapSetScriptName"))
+		{
+			GetEntPropString(weapon, Prop_Data, "m_strMapSetScriptName", g_sLoadoutMelee[client], LOADOUT_CLASS_LEN);
+		}
+	}
+
+	if ((weapon = GetPlayerWeaponSlot(client, 2)) != -1)
+		GetEntityClassname(weapon, g_sLoadoutThrowable[client], LOADOUT_CLASS_LEN);
+
+	if ((weapon = GetPlayerWeaponSlot(client, 3)) != -1)
+		GetEntityClassname(weapon, g_sLoadoutHealth[client], LOADOUT_CLASS_LEN);
+
+	if ((weapon = GetPlayerWeaponSlot(client, 4)) != -1)
+		GetEntityClassname(weapon, g_sLoadoutTemp[client], LOADOUT_CLASS_LEN);
+}
+
+void RestoreLoadout(int client)
+{
+	if (!g_bHasLoadout[client])
+		return;
+
+	if (cv_KeepItems.BoolValue
+		&& IsClientInGame(client)
+		&& IsPlayerAlive(client)
+		&& GetClientTeam(client) == 2)
+	{
+		RestoreLoadoutSlot(client, 0, g_sLoadoutPrimary[client],   "");
+		RestoreLoadoutSlot(client, 1, g_sLoadoutSecondary[client], g_sLoadoutMelee[client]);
+		RestoreLoadoutSlot(client, 2, g_sLoadoutThrowable[client], "");
+		RestoreLoadoutSlot(client, 3, g_sLoadoutHealth[client],    "");
+		RestoreLoadoutSlot(client, 4, g_sLoadoutTemp[client],      "");
+	}
+
+	ClearLoadout(client);
+}
+
+void RestoreLoadoutSlot(int client, int slot, const char[] classname, const char[] meleeScript)
+{
+	if (classname[0] == '\0')
+		return;
+
+	int current = GetPlayerWeaponSlot(client, slot);
+	if (current != -1)
+	{
+		char currentClass[LOADOUT_CLASS_LEN];
+		if (GetEntityClassname(current, currentClass, LOADOUT_CLASS_LEN) && StrEqual(currentClass, classname))
+		{
+			// 同槽位已有相同物品: 近战武器还需确认具体型号一致
+			if (!StrEqual(classname, "weapon_melee") || meleeScript[0] == '\0')
+				return;
+
+			if (!HasEntProp(current, Prop_Data, "m_strMapSetScriptName"))
+				return;
+
+			char currentMelee[LOADOUT_CLASS_LEN];
+			GetEntPropString(current, Prop_Data, "m_strMapSetScriptName", currentMelee, LOADOUT_CLASS_LEN);
+			if (StrEqual(currentMelee, meleeScript))
+				return;
+		}
+
+		// 槽位有其它物品，先移除再还原
+		if (RemovePlayerItem(client, current))
+			RemoveEntity(current);
+	}
+
+	GiveLoadoutItem(client, classname, meleeScript);
+}
+
+void GiveLoadoutItem(int client, const char[] classname, const char[] meleeScript)
+{
+	// 近战武器需要按型号重建，否则 GivePlayerItem 只会给出随机/默认近战
+	if (StrEqual(classname, "weapon_melee") && meleeScript[0] != '\0')
+	{
+		int melee = CreateEntityByName("weapon_melee");
+		if (melee == -1)
+			return;
+
+		DispatchKeyValue(melee, "melee_script_name", meleeScript);
+		DispatchSpawn(melee);
+		EquipPlayerWeapon(client, melee);
+		return;
+	}
+
+	GivePlayerItem(client, classname);
+}
+
+void ClearLoadout(int client)
+{
+	g_bHasLoadout[client]          = false;
+	g_sLoadoutPrimary[client][0]   = '\0';
+	g_sLoadoutSecondary[client][0] = '\0';
+	g_sLoadoutMelee[client][0]     = '\0';
+	g_sLoadoutThrowable[client][0] = '\0';
+	g_sLoadoutHealth[client][0]    = '\0';
+	g_sLoadoutTemp[client][0]      = '\0';
 }
 
 // =============================================================================
