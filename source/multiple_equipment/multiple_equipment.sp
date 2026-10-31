@@ -79,9 +79,12 @@ StringMap g_hNameZH;
 StringMap g_hSlotOf;
 
 // 保留备用数据的截止时间。
-// 新地图加载 / 过关切换章节后的一段时间内，round_start（可能触发多次）
-// 都不清空备用数据；超过这个时间后的普通新回合才清空。
+// 正常过关切换章节后的一段时间内，round_start（可能触发多次）都不清空备用数据；
+// 超过这个时间后的普通新回合才清空。
 float g_flKeepUntil = 0.0;
+// 上一张地图是否触发了正常的过关切换章节事件（map_transition）。
+// 只有这种情况才保留备用物品；指令换图 / 新战役 / 非正常换图一律清空。
+bool g_bChapterTransition = false;
 
 public Plugin myinfo =
 {
@@ -115,6 +118,8 @@ public void OnPluginStart()
 	HookEvent("revive_begin",   Event_ReviveBegin,   EventHookMode_Post);
 	HookEvent("round_start",    Event_RoundStart,    EventHookMode_PostNoCopy);
 	HookEvent("map_transition", Event_MapTransition, EventHookMode_PostNoCopy);
+	HookEvent("finale_win",     Event_FinaleWin,     EventHookMode_PostNoCopy);
+	HookEvent("mission_lost",   Event_MissionLost,   EventHookMode_PostNoCopy);
 
 	// 插件在游戏中途被重载时，恢复当前在线玩家的备用物品
 	for (int i = 1; i <= MaxClients; i++)
@@ -149,10 +154,23 @@ public void OnClientDisconnect(int client)
 
 public void OnMapStart()
 {
-	// 地图加载完成。备用数据保存在插件全局变量里，会跨地图保留。
-	// 新地图加载后的 15 秒内发生的 round_start 一律不清空
-	//（L4D2 换图期间 round_start 可能触发多次，事件先后也不固定）。
-	g_flKeepUntil = GetGameTime() + 15.0;
+	// 区分两种换图：
+	//   - 正常过关（旧地图触发过 map_transition）：保留备用物品；
+	//   - 指令换图 / 新战役 / 非正常换图：全部清空，新地图从零开始。
+	if (g_bChapterTransition)
+	{
+		g_bChapterTransition = false;
+
+		// 新地图加载后的 15 秒内发生的 round_start 一律不清空
+		//（L4D2 换图期间 round_start 可能触发多次，事件先后也不固定）。
+		g_flKeepUntil = GetGameTime() + 15.0;
+	}
+	else
+	{
+		ClearAllState();
+		g_flKeepUntil = 0.0;
+		PrintToServer("[多重装备] 非过关换图，已清空全部备用物品状态");
+	}
 }
 
 // ===========================================================================
@@ -552,8 +570,47 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
  */
 public void Event_MapTransition(Event event, const char[] name, bool dontBroadcast)
 {
+	// 只有触发过这个事件的换图才是“正常过关换章节”，新地图才保留备用物品
+	g_bChapterTransition = true;
 	g_flKeepUntil = GetGameTime() + 120.0;
 	SaveAllToFile();
+}
+
+/**
+ * 战役通关：清空全部备用物品。
+ * 否则上一局战役的备用物品会通过内存 / 存档带入下一局新战役。
+ */
+public void Event_FinaleWin(Event event, const char[] name, bool dontBroadcast)
+{
+	ClearAllState();
+	PrintToServer("[多重装备] 战役通关，已清空全部备用物品状态");
+}
+
+/**
+ * 战役失败（团灭/任务失败）：同样清空，重开时是干净状态。
+ */
+public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast)
+{
+	ClearAllState();
+	PrintToServer("[多重装备] 战役失败，已清空全部备用物品状态");
+}
+
+/**
+ * 清空所有玩家的备用物品并删除存档文件。
+ */
+stock void ClearAllState()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		ResetClient(i);
+	}
+
+	char path[PLATFORM_MAX_PATH];
+	GetDataPath(path, sizeof(path));
+	if (FileExists(path))
+	{
+		DeleteFile(path);
+	}
 }
 
 /**
