@@ -46,6 +46,9 @@
 // 槽位“忙碌”时间（秒）：物品正在被使用/投掷的这段时间内禁止互换，
 // 防止把正在扔出去的投掷物收进备用槽导致无限投掷物
 #define SLOT_BUSY_TIME 1.5
+// 备用物品存档文件（相对 addons/sourcemod/），按 SteamID 保存，
+// 用于插件重载 / 玩家重连 / 换图后恢复备用物品
+#define DATA_FILE "data/multiple_equipment.cfg"
 
 // ---------------------------------------------------------------------------
 // 每个玩家、每个槽位的备用物品数据
@@ -75,10 +78,10 @@ StringMap g_hNameZH;
 // classname -> 武器所在槽位（用于判断“被替换下来的旧物品”属于哪个槽）
 StringMap g_hSlotOf;
 
-// 是否正在“过关切换章节”。用于区分：
-//   true  = 新地图的 round_start，需要保留备用数据
-//   false = 对抗等模式的新回合，需要清空数据
-bool g_bMapTransition = false;
+// 保留备用数据的截止时间。
+// 新地图加载 / 过关切换章节后的一段时间内，round_start（可能触发多次）
+// 都不清空备用数据；超过这个时间后的普通新回合才清空。
+float g_flKeepUntil = 0.0;
 
 public Plugin myinfo =
 {
@@ -99,6 +102,9 @@ public void OnPluginStart()
 	// 只在这里查一次，避免参考实现那样每次读写都调用 FindSendPropInfo。
 	g_iAmmoOffset = FindSendPropInfo("CTerrorPlayer", "m_iAmmo");
 
+	// 插件在中途加载时也给出一个保留窗口，避免第一个 round_start 误清空
+	g_flKeepUntil = GetGameTime() + 15.0;
+
 	BuildItemMaps();
 
 	HookEvent("player_death",   Event_PlayerDeath,   EventHookMode_Post);
@@ -109,24 +115,44 @@ public void OnPluginStart()
 	HookEvent("revive_begin",   Event_ReviveBegin,   EventHookMode_Post);
 	HookEvent("round_start",    Event_RoundStart,    EventHookMode_PostNoCopy);
 	HookEvent("map_transition", Event_MapTransition, EventHookMode_PostNoCopy);
+
+	// 插件在游戏中途被重载时，恢复当前在线玩家的备用物品
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && !IsFakeClient(i))
+		{
+			LoadClientFromFile(i);
+		}
+	}
+}
+
+public void OnPluginEnd()
+{
+	// 插件被卸载/重载前保存，避免换图时重载导致数据丢失
+	SaveAllToFile();
 }
 
 public void OnClientPutInServer(int client)
 {
-	// 新连接的玩家（可能复用了刚断开玩家的下标）：初始化干净状态
+	// 新连接的玩家（可能复用了刚断开玩家的下标）：先清干净，再从存档恢复。
+	// 部分服务器换图时客户端会重连，这一步是跨章节保留备用物品的关键。
 	ResetClient(client);
+	LoadClientFromFile(client);
 }
 
 public void OnClientDisconnect(int client)
 {
-	// 玩家离开：清空数据，防止下标被后来者复用后串数据
+	// 玩家离开前先把当前备用物品写入存档（重连/换图重连后可以恢复）
+	SaveClientToFile(client);
 	ResetClient(client);
 }
 
 public void OnMapStart()
 {
-	// 地图加载完成。备用数据保存在插件全局变量里，会跨地图保留，
-	// 这里什么都不做，交由 round_start 判断是否保留。
+	// 地图加载完成。备用数据保存在插件全局变量里，会跨地图保留。
+	// 新地图加载后的 15 秒内发生的 round_start 一律不清空
+	//（L4D2 换图期间 round_start 可能触发多次，事件先后也不固定）。
+	g_flKeepUntil = GetGameTime() + 15.0;
 }
 
 // ===========================================================================
@@ -152,6 +178,9 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 	}
 
 	ResetClient(client);
+
+	// 把清空后的状态写回存档，避免重连/重载后把已经掉落的备用物品又恢复出来
+	SaveClientToFile(client);
 }
 
 /**
@@ -488,29 +517,61 @@ stock void RefillFromBackup(int client, int slot)
 
 /**
  * 回合开始：
- *   - 如果这是“过章节”后新地图的回合，保留备用物品；
- *   - 否则（对抗新回合、重开等）清空所有备用物品。
+ *   - 新地图刚加载（或刚过关切换章节）的一段时间内：保留备用物品；
+ *   - 其他情况（对抗新回合、mission_lost 重开等）：清空备用物品。
+ *
+ * 用“时间窗”而不是一次性标记，因为 L4D2 换图期间 round_start 可能触发不止一次，
+ * 一次性标记被第一次消费后，后续 round_start 会误清空刚保留的数据。
  */
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
-	if (g_bMapTransition)
+	if (GetGameTime() < g_flKeepUntil)
 	{
-		g_bMapTransition = false;
 		return;
+	}
+
+	// 只在确实存在备用数据时打日志，方便服务器端确认清空时机
+	if (AnyBackupData())
+	{
+		PrintToServer("[多重装备] 新回合开始，清空所有备用物品");
 	}
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
 		ResetClient(i);
 	}
+
+	// 同步清空存档，避免重载/重连后恢复出上一回合的备用物品
+	SaveAllToFile();
 }
 
 /**
- * 过关切换章节事件：只打标记，真正的判断在下一张地图的 round_start 里做。
+ * 过关切换章节：延长保留窗口，覆盖地图加载较慢的情况。
+ * 无论 GetGameTime 是否随地图重置，这个截止时间都能让新地图的 round_start 保留数据。
+ * 同时把当前备用物品写盘，插件若在此刻被重载也能从存档恢复。
  */
 public void Event_MapTransition(Event event, const char[] name, bool dontBroadcast)
 {
-	g_bMapTransition = true;
+	g_flKeepUntil = GetGameTime() + 120.0;
+	SaveAllToFile();
+}
+
+/**
+ * 是否还有任何玩家保存着备用物品（只在新回合清空前调用一次）。
+ */
+stock bool AnyBackupData()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		for (int slot = 0; slot < MAX_SLOTS; slot++)
+		{
+			if (g_sBackup[i][slot][0] != '\0')
+			{
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 // ===========================================================================
@@ -1146,6 +1207,182 @@ stock void ClearSlotBackup(int client, int slot)
 	g_iClip[client][slot] = 0;
 	g_iUpgrade[client][slot] = 0;
 	g_iUpgradeAmmo[client][slot] = 0;
+}
+
+// ===========================================================================
+// 存档：跨地图 / 插件重载 / 玩家重连时保留备用物品
+// ===========================================================================
+// 只靠插件全局变量不够可靠：部分服务器换图会重连客户端，或换图时重载插件，
+// 全局数组会被清零。这里参考 dual_primaries 的做法，把每个玩家的备用物品
+// 按 SteamID 写入 KeyValues 存档，并在连接、插件重载时恢复。
+
+/**
+ * 存档路径：addons/sourcemod/data/multiple_equipment.cfg
+ */
+stock void GetDataPath(char[] path, int len)
+{
+	BuildPath(Path_SM, path, len, DATA_FILE);
+}
+
+/**
+ * 保存单个玩家的备用物品。
+ * 该玩家没有备用物品时会删除存档里对应的节。
+ */
+stock void SaveClientToFile(int client)
+{
+	if (client < 1 || client > MaxClients || IsFakeClient(client))
+	{
+		return;
+	}
+
+	char steamId[64];
+	if (!GetClientAuthId(client, AuthId_Steam2, steamId, sizeof(steamId), false))
+	{
+		return;
+	}
+
+	char path[PLATFORM_MAX_PATH];
+	GetDataPath(path, sizeof(path));
+
+	KeyValues kv = new KeyValues("MultipleEquipment");
+	if (FileExists(path))
+	{
+		kv.ImportFromFile(path);
+	}
+
+	// 先删除该玩家的旧数据
+	if (kv.JumpToKey(steamId, false))
+	{
+		kv.GoBack();
+		kv.DeleteKey(steamId);
+	}
+
+	// 检查是否还有备用物品
+	bool hasBackup = false;
+	for (int slot = 0; slot < MAX_SLOTS; slot++)
+	{
+		if (g_sBackup[client][slot][0] != '\0')
+		{
+			hasBackup = true;
+			break;
+		}
+	}
+
+	if (hasBackup)
+	{
+		kv.JumpToKey(steamId, true);
+
+		for (int slot = 0; slot < MAX_SLOTS; slot++)
+		{
+			if (g_sBackup[client][slot][0] == '\0')
+			{
+				continue;
+			}
+
+			char slotName[8];
+			FormatEx(slotName, sizeof(slotName), "%d", slot);
+
+			kv.JumpToKey(slotName, true);
+			kv.SetString("item", g_sBackup[client][slot]);
+			kv.SetNum("ammo", g_iAmmo[client][slot]);
+			kv.SetNum("clip", g_iClip[client][slot]);
+			kv.SetNum("upgrade", g_iUpgrade[client][slot]);
+			kv.SetNum("upgradeAmmo", g_iUpgradeAmmo[client][slot]);
+			kv.GoBack();
+		}
+
+		kv.GoBack();
+	}
+
+	kv.Rewind();
+	kv.ExportToFile(path);
+	delete kv;
+}
+
+/**
+ * 保存所有在线玩家（换图前、插件卸载前调用）。
+ */
+stock void SaveAllToFile()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && !IsFakeClient(i))
+		{
+			SaveClientToFile(i);
+		}
+	}
+}
+
+/**
+ * 从存档恢复单个玩家的备用物品。
+ * 调用方负责先重置该玩家的内存数据（OnClientPutInServer 已做）。
+ */
+stock void LoadClientFromFile(int client)
+{
+	if (client < 1 || client > MaxClients || IsFakeClient(client))
+	{
+		return;
+	}
+
+	char path[PLATFORM_MAX_PATH];
+	GetDataPath(path, sizeof(path));
+	if (!FileExists(path))
+	{
+		return;
+	}
+
+	char steamId[64];
+	if (!GetClientAuthId(client, AuthId_Steam2, steamId, sizeof(steamId), false))
+	{
+		return;
+	}
+
+	KeyValues kv = new KeyValues("MultipleEquipment");
+	if (!kv.ImportFromFile(path))
+	{
+		delete kv;
+		return;
+	}
+
+	if (!kv.JumpToKey(steamId, false))
+	{
+		delete kv;
+		return;
+	}
+
+	// 保证从干净状态开始读取
+	for (int slot = 0; slot < MAX_SLOTS; slot++)
+	{
+		ClearSlotBackup(client, slot);
+	}
+
+	for (int slot = 0; slot < MAX_SLOTS; slot++)
+	{
+		char slotName[8];
+		FormatEx(slotName, sizeof(slotName), "%d", slot);
+
+		if (!kv.JumpToKey(slotName, false))
+		{
+			continue;
+		}
+
+		char key[ITEM_LEN];
+		key[0] = '\0';
+		kv.GetString("item", key, sizeof(key));
+
+		if (key[0] != '\0')
+		{
+			strcopy(g_sBackup[client][slot], ITEM_LEN, key);
+			g_iAmmo[client][slot]        = kv.GetNum("ammo");
+			g_iClip[client][slot]        = kv.GetNum("clip");
+			g_iUpgrade[client][slot]     = kv.GetNum("upgrade");
+			g_iUpgradeAmmo[client][slot] = kv.GetNum("upgradeAmmo");
+		}
+
+		kv.GoBack();
+	}
+
+	delete kv;
 }
 
 // ===========================================================================
