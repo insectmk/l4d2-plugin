@@ -9,6 +9,8 @@
  *          原生逻辑切换到该槽位的物品，插件不会做任何跨槽位操作。
  *       2. 当玩家捡起同槽位的第二件物品时，被替换下来的旧物品会自动收进该槽位
  *          的备用槽（聊天框会有提示）。
+ *          如果第二件物品与手持物品“完全相同”（医疗包、药丸、投掷物、近战武器），
+ *          引擎原本会直接拒绝拾取，插件会接管这次拾取：旧物品进备用槽，新物品进背包。
  *       3. 在当前物品上再按一次同一个槽位键，就会和该槽位的备用物品互换。
  *   - 玩家改键后依然有效：插件识别的是“槽位”而不是物理按键。
  *   - 幸存者死亡时，除了引擎原生掉落手持物品外，插件会把备用物品也掉在尸体旁。
@@ -113,6 +115,7 @@ public void OnPluginStart()
 	HookEvent("player_death",   Event_PlayerDeath,   EventHookMode_Post);
 	HookEvent("player_spawn",   Event_PlayerSpawn,   EventHookMode_Post);
 	HookEvent("weapon_drop",    Event_WeaponDrop,    EventHookMode_Post);
+	HookEvent("player_use",     Event_PlayerUse,     EventHookMode_Post);
 	HookEvent("weapon_fire",    Event_WeaponFire,    EventHookMode_Post);
 	HookEvent("heal_begin",     Event_HealBegin,     EventHookMode_Post);
 	HookEvent("revive_begin",   Event_ReviveBegin,   EventHookMode_Post);
@@ -354,6 +357,173 @@ public Action Timer_StoreDroppedItem(Handle timer, DataPack pack)
 	CreateTimer(0.4, Timer_RefillSlot, refillPack, TIMER_FLAG_NO_MAPCHANGE);
 
 	return Plugin_Stop;
+}
+
+/**
+ * 玩家按下 +USE 使用了某个实体（可能是捡起地上的物品）。
+ *
+ * 为什么要监听这个事件：
+ *   - 槽位 0（主武器）和槽位 1（近战 / 手枪双持）在捡同槽位物品时，引擎会自己
+ *     完成换装并触发 weapon_drop，现有的“自动收藏备用物品”逻辑已经能处理。
+ *   - 槽位 2/3/4（投掷物 / 医疗包 / 药丸）在槽位已有同类物品时，引擎会直接拒绝
+ *     拾取，而且不会触发 weapon_drop，所以现有逻辑永远拿不到“第二件相同道具”。
+ *   拾取成功时 item_pickup 先于 player_use 触发；拾取被拒绝时只有 player_use。
+ *   因此这里只在“引擎拒绝的完全相同道具”这一种情况下接管，其他情况一律不处理。
+ */
+public void Event_PlayerUse(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (!IsValidSurvivor(client))
+	{
+		return;
+	}
+
+	// targetid 是被使用实体的 entindex（L4D2 的 player_use 事件字段）
+	CaptureDuplicatePickup(client, event.GetInt("targetid"));
+}
+
+/**
+ * 接管“同槽位再捡一件完全相同道具”的拾取。
+ *
+ * 引擎在槽位已有同类物品时会拒绝拾取，玩家只能先把旧物品丢到地上。
+ * 这里把这次被拒绝的拾取改成一次“备用槽收纳”：
+ *   旧物品 → 备用槽（保留弹药/弹匣/升级数据），地上的新物品 → 装进玩家背包。
+ *
+ * 与现有逻辑的边界（保证互不干扰）：
+ *   - 拾取成功时 current == target（引擎把同一实体给了玩家），直接不处理；
+ *   - 不同物品的换装由引擎触发 weapon_drop，走现有的 Timer_StoreDroppedItem，不处理；
+ *   - 销毁旧物品用 RemovePlayerItem + Kill，与 SwapItem 相同，不会触发 weapon_drop，
+ *     因此不会和现有收藏逻辑重复；
+ *   - 备用槽已有物品时保持原行为：不接管（引擎照常拒绝拾取）。
+ *
+ * @param client 玩家
+ * @param target 玩家按 E 使用的实体（地上物品的 entindex）
+ * @return       true 表示本次拾取已被接管
+ */
+stock bool CaptureDuplicatePickup(int client, int target)
+{
+	// 目标必须是有效实体，并且是插件管理的物品（类名能查到槽位）
+	if (target <= 0 || !IsValidEntity(target))
+	{
+		return false;
+	}
+
+	// 目标已经被玩家持有（拾取成功时引擎会把实体转给玩家），说明不需要接管。
+	// 这一步同时兜住“引擎用新实体替代地上实体”的分支，避免把刚捡到的物品又收进备用槽。
+	if (GetEntPropEnt(target, Prop_Send, "m_hOwnerEntity") == client)
+	{
+		return false;
+	}
+
+	char classname[ITEM_LEN];
+	GetEntityClassname(target, classname, sizeof(classname));
+
+	int slot;
+	if (!g_hSlotOf.GetValue(classname, slot))
+	{
+		return false;
+	}
+
+	// 槽位过滤：
+	//   - 0 主武器：引擎原生换装会触发 weapon_drop，现有逻辑已支持，不接管；
+	//   - 1 只处理近战武器（weapon_melee）：手枪捡第二把是原生双持，电锯也不在本次范围内；
+	//   - 2/3/4：正是引擎会拒绝同类拾取的槽位，需要接管。
+	if (slot < 1 || slot > 4)
+	{
+		return false;
+	}
+	if (slot == 1 && !StrEqual(classname, "weapon_melee"))
+	{
+		return false;
+	}
+
+	// 物品正在被使用/投掷（忙碌窗口）内不接管，避免把正在消耗的物品复制进备用槽
+	if (g_flSlotBusy[client][slot] > 0.0
+		&& GetGameTime() - g_flSlotBusy[client][slot] < SLOT_BUSY_TIME)
+	{
+		return false;
+	}
+
+	int current = GetPlayerWeaponSlot(client, slot);
+
+	// 槽位为空：引擎会正常拾取，不需要接管；
+	// current == target：引擎已经把同一件物品给了玩家（拾取成功），同样不需要接管。
+	if (current <= 0 || current == target)
+	{
+		return false;
+	}
+
+	// 备用槽已经有物品：保持现有行为（静默不处理，引擎的拒绝结果不变）
+	if (g_sBackup[client][slot][0] != '\0')
+	{
+		return false;
+	}
+
+	// 只接管“完全相同”的物品：
+	// 同槽位的不同物品（急救包 ↔ 电击器、燃烧瓶 ↔ 管状炸弹）引擎会自己换下旧物品，
+	// 由 weapon_drop 的现有逻辑收藏；这里再处理会和那条路径重复。
+	char curKey[ITEM_LEN];
+	char targetKey[ITEM_LEN];
+	GetItemKey(current, curKey, sizeof(curKey));
+	GetItemKey(target, targetKey, sizeof(targetKey));
+
+	if (curKey[0] == '\0' || !StrEqual(curKey, targetKey))
+	{
+		return false;
+	}
+
+	// 先读取手持物品的完整状态（这一帧实体仍然有效），再移除
+	int ammo, clip, upgrade, upgradeAmmo;
+	ReadItemData(client, slot, current, ammo, clip, upgrade, upgradeAmmo);
+
+	// 拾取医疗包/药丸/投掷物时引擎不会切换手上的武器，
+	// 所以先记下当前主动武器，装备完成后按需还原（与 RefillFromBackup 的处理一致）
+	int prevActive = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+
+	// 直接移除并销毁手持物品：与 SwapItem 一样，不在原地留下可以再捡起的复制品。
+	// RemovePlayerItem + Kill 不会触发 weapon_drop，不会和现有收藏逻辑重复。
+	RemovePlayerItem(client, current);
+	AcceptEntityInput(current, "Kill");
+
+	// 把刚才换下来的旧物品收进备用槽
+	strcopy(g_sBackup[client][slot], ITEM_LEN, curKey);
+	g_iAmmo[client][slot]        = ammo;
+	g_iClip[client][slot]        = clip;
+	g_iUpgrade[client][slot]     = upgrade;
+	g_iUpgradeAmmo[client][slot] = upgradeAmmo;
+
+	// 直接把地上的同一实体装备给玩家：不新建实体，也就没有重复物品需要销毁
+	EquipPlayerWeapon(client, target);
+
+	// 投掷物数量为 0 会被游戏当成空物品（不显示/无法捡起/换手后消失），
+	// 复用现有的数据写入函数保证至少为 1（其他槽位不受影响）
+	if (slot == 2)
+	{
+		ApplyItemData(client, slot, target, 0, 1, 0, 0);
+	}
+
+	// 主动武器处理：
+	//   - 被替换的正是手上拿着的物品 → 把主动武器指向新捡起的同一件物品，避免空手；
+	//   - 只是背包里的槽位被替换 → 还原主动武器，保持与原生拾取一致的手感。
+	if (prevActive == current)
+	{
+		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", target);
+	}
+	else if (prevActive > 0 && IsValidEntity(prevActive)
+		&& GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") != prevActive)
+	{
+		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", prevActive);
+
+		// 只在真的发生切换时清掉“切换后攻击延迟”，避免出现动作僵硬/卡手
+		SetEntPropFloat(client, Prop_Send, "m_flNextAttack", GetGameTime());
+	}
+
+	// 与 weapon_drop 收藏路径保持一致的聊天提示
+	char itemName[ITEM_LEN];
+	GetDisplayName(curKey, itemName, sizeof(itemName));
+	CPrintToChat(client, "{olive}[多重装备]{default} 备用 {lightgreen}%s{default}", itemName);
+
+	return true;
 }
 
 /**
